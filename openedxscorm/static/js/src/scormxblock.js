@@ -182,11 +182,15 @@ function ScormXBlock(runtime, element, settings) {
         
     // We only make calls to the get_value handler when absolutely required.
     // These calls are synchronous and they can easily clog the scorm display.
+    // cmi.core.lesson_status and cmi.core.score.raw are deliberately omitted. For elements
+    // in this list GetValue() below discards the server response: its `return` sits inside
+    // the jQuery success callback, so the value is handed to jQuery (which ignores callback
+    // return values) rather than to GetValue, which then falls through to `return ""`.
+    // Serving these two from settings.scorm_data instead returns the correct value and
+    // removes one blocking synchronous request per read.
     var uncachedValues = [
-        "cmi.core.lesson_status",
         "cmi.completion_status",
         "cmi.success_status",
-        "cmi.core.score.raw",
         "cmi.score.raw",
         "cmi.score.scaled",
         "cmi.mode"
@@ -228,8 +232,14 @@ function ScormXBlock(runtime, element, settings) {
     function SetValueAsync(cmi_element, value) {
         setValueEvents.push([cmi_element, value]);
         if (!processingSetValueEventsQueue) {
-            // There is no running queue processor so we start one
-            processSetValueQueueItems();
+            // There is no running queue processor so we start one. Defer it by one tick:
+            // callers typically push several elements in a row synchronously, and starting
+            // the processor immediately would ship the first element on its own and batch
+            // the rest into a second request. Claiming the queue flag now prevents each
+            // subsequent push from scheduling its own processor, and makes Terminate()
+            // below wait for the queue to drain rather than reporting a stale batch.
+            processingSetValueEventsQueue = true;
+            setTimeout(processSetValueQueueItems, 0);
         }
     }
     function processSetValueQueueItems() {
